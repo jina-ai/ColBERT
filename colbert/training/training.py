@@ -93,12 +93,13 @@ def train(args):
 
         for queries, passages in BatchSteps:
             with amp.context():
-                scores = colbert(queries, passages).view(2, -1).permute(1, 0)
-                loss = criterion(scores, labels[:scores.size(0)])
+                scores = colbert(queries, passages)
+                losses = [criterion(score.view(2, -1).permute(1, 0), labels[:score.size(0)]) for score in scores]                
+                loss = torch.stack(losses).sum()
                 loss = loss / args.accumsteps
 
-            if args.rank < 1:
-                print_progress(scores)
+            # if args.rank < 1:
+            #     print_progress(scores[-1])
 
             amp.backward(loss)
 

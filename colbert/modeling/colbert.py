@@ -28,10 +28,17 @@ class ColBERT(BertPreTrainedModel):
         self.bert = BertModel(config)
         self.linear = nn.Linear(config.hidden_size, dim, bias=False)
 
+        self.nesting_list = [32, 64, 128, 256, 512, 768]
+
         self.init_weights()
 
     def forward(self, Q, D):
-        return self.score(self.query(*Q), self.doc(*D))
+        Q = self.query(*Q)
+        D = self.doc(*D)
+        scores = []
+        for num_feat in self.nesting_list:
+            scores.append(self.score(Q[:, :, :num_feat], D[:, :, :num_feat]))
+        return scores
 
     def query(self, input_ids, attention_mask):
         input_ids, attention_mask = input_ids.to(DEVICE), attention_mask.to(DEVICE)
