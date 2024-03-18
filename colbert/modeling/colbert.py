@@ -7,7 +7,8 @@ from colbert.parameters import DEVICE
 
 
 class ColBERT(BertPreTrainedModel):
-    def __init__(self, config, query_maxlen, doc_maxlen, mask_punctuation, dim=128, similarity_metric='cosine'):
+    def __init__(self, config, query_maxlen, doc_maxlen, mask_punctuation, dim=128, similarity_metric='cosine', 
+                 matryoshka=False, output_dim=None):
 
         super(ColBERT, self).__init__(config)
 
@@ -26,9 +27,20 @@ class ColBERT(BertPreTrainedModel):
                              for w in [symbol, self.tokenizer.encode(symbol, add_special_tokens=False)[0]]}
 
         self.bert = BertModel(config)
-        self.linear = nn.Linear(config.hidden_size, dim, bias=False)
 
-        self.nesting_list = [32, 64, 128, 256, 512, 768]
+        # TODO: refactor this
+        if matryoshka:
+            self.matryoshka = True
+            self.nesting_list = [int(x) for x in matryoshka.split(',')]
+            self.accumulated = [sum(self.nesting_list[:i]) for i in range(len(self.nesting_list) + 1)]
+            self.linear = nn.Linear(config.hidden_size, sum(self.nesting_list), bias=False)
+        else:
+            self.matryoshka = False
+            self.nesting_list = self.accumulated = None
+            self.linear = nn.Linear(config.hidden_size, dim, bias=False)
+        self.output_dim = output_dim or self.dim
+        if self.output_dim and self.nesting_list:
+            assert self.output_dim in self.nesting_list
 
         self.init_weights()
 
@@ -36,15 +48,24 @@ class ColBERT(BertPreTrainedModel):
         Q = self.query(*Q)
         D = self.doc(*D)
         scores = []
-        for num_feat in self.nesting_list:
-            scores.append(self.score(Q[:, :, :num_feat], D[:, :, :num_feat]))
+        if self.matryoshka:
+            for i in range(len(self.nesting_list)):
+                Q_ = Q[:, :, self.accumulated[i]:self.accumulated[i + 1]]
+                Q_ = torch.nn.functional.normalize(Q_, p=2, dim=2)
+                D_ = D[:, :, self.accumulated[i]:self.accumulated[i + 1]]
+                D_ = torch.nn.functional.normalize(D_, p=2, dim=2)
+                scores.append(self.score(Q_, D_))
+        else:
+            scores.append(self.score(Q, D))
         return scores
 
     def query(self, input_ids, attention_mask):
         input_ids, attention_mask = input_ids.to(DEVICE), attention_mask.to(DEVICE)
         Q = self.bert(input_ids, attention_mask=attention_mask)[0]
         Q = self.linear(Q)
-
+        if self.matryoshka and self.output_dim:
+            i = self.nesting_list.index(self.output_dim)
+            Q = Q[:, :, self.accumulated[i]:self.accumulated[i + 1]]
         return torch.nn.functional.normalize(Q, p=2, dim=2)
 
     def doc(self, input_ids, attention_mask, keep_dims=True):
@@ -55,6 +76,9 @@ class ColBERT(BertPreTrainedModel):
         mask = torch.tensor(self.mask(input_ids), device=DEVICE).unsqueeze(2).float()
         D = D * mask
 
+        if self.matryoshka and self.output_dim:
+            i = self.nesting_list.index(self.output_dim)
+            D = D[:, :, self.accumulated[i]:self.accumulated[i + 1]]
         D = torch.nn.functional.normalize(D, p=2, dim=2)
 
         if not keep_dims:

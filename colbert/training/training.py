@@ -45,10 +45,11 @@ def train(args):
                                       doc_maxlen=args.doc_maxlen,
                                       dim=args.dim,
                                       similarity_metric=args.similarity,
-                                      mask_punctuation=args.mask_punctuation)
+                                      mask_punctuation=args.mask_punctuation,
+                                      matryoshka=args.matryoshka)
 
     if args.checkpoint is not None:
-        assert args.resume_optimizer is False, "TODO: This would mean reload optimizer too."
+        # assert args.resume_optimizer is False, "TODO: This would mean reload optimizer too."
         print_message(f"#> Starting from checkpoint {args.checkpoint} -- but NOT the optimizer!")
 
         checkpoint = torch.load(args.checkpoint, map_location='cpu')
@@ -72,6 +73,11 @@ def train(args):
 
     optimizer = AdamW(filter(lambda p: p.requires_grad, colbert.parameters()), lr=args.lr, eps=1e-8)
     optimizer.zero_grad()
+    
+    if args.checkpoint is not None and args.resume_optimizer:
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        print_message("#> Resuming the optimizer from the checkpoint.")
+        optimizer.zero_grad()
 
     amp = MixedPrecisionManager(args.amp)
     criterion = nn.CrossEntropyLoss()

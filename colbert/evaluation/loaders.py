@@ -20,7 +20,10 @@ def load_queries(queries_path):
     with open(queries_path) as f:
         for line in f:
             qid, query, *_ = line.strip().split('\t')
-            qid = int(qid)
+            try:
+                qid = int(qid)
+            except:
+                pass
 
             assert (qid not in queries), ("Query QID", qid, "is repeated!")
             queries[qid] = query
@@ -161,7 +164,7 @@ def load_collection(collection_path):
                 print(f'{line_idx // 1000 // 1000}M', end=' ', flush=True)
 
             pid, passage, *rest = line.strip().split('\t')
-            assert pid == 'id' or int(pid) == line_idx
+            # assert pid == 'id' or int(pid) == line_idx
 
             if len(rest) >= 1:
                 title = rest[0]

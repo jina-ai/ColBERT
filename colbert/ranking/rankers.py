@@ -16,7 +16,8 @@ class Ranker():
             self.faiss_index = FaissIndex(args.index_path, args.faiss_index_path, args.nprobe, part_range=args.part_range)
             self.retrieve = partial(self.faiss_index.retrieve, self.faiss_depth)
 
-        self.index = IndexPart(args.index_path, dim=inference.colbert.dim, part_range=args.part_range, verbose=True)
+        dim = args.output_dim or inference.colbert.dim
+        self.index = IndexPart(args.index_path, dim=dim, part_range=args.part_range, verbose=True)
 
     def encode(self, queries):
         assert type(queries) in [list, tuple], type(queries)

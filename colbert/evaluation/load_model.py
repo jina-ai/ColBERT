@@ -16,7 +16,9 @@ def load_model(args, do_print=True):
                                       doc_maxlen=args.doc_maxlen,
                                       dim=args.dim,
                                       similarity_metric=args.similarity,
-                                      mask_punctuation=args.mask_punctuation)
+                                      mask_punctuation=args.mask_punctuation,
+                                      matryoshka=args.matryoshka,
+                                      output_dim=args.output_dim)
     colbert = colbert.to(DEVICE)
 
     print_message("#> Loading model checkpoint.", condition=do_print)
