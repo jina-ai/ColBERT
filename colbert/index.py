@@ -1,17 +1,32 @@
+# scripts for indexing the collection
+
+import argparse
+
+from colbert.infra import Run, RunConfig, ColBERTConfig
+from colbert import Indexer
 
 
-# TODO: This is the loaded index, underneath a searcher.
+def main(args):
 
+    with Run().context(RunConfig(nranks=1, experiment=args.experiment)):
+        config = ColBERTConfig(
+            nbits=2,
+            kmeans_niters=20,
+            root="experiments",
+            doc_maxlen=args.doc_maxlen,
+        )
+        indexer = Indexer(
+            checkpoint=args.checkpoint,
+            config=config
+        )
+        indexer.index(name=args.index_name, collection=args.collection, overwrite="resume")
 
-"""
-## Operations:
-
-index = Index(index='/path/to/index')
-index.load_to_memory()
-
-batch_of_pids = [2324,32432,98743,23432]
-index.lookup(batch_of_pids, device='cuda:0') -> (N, doc_maxlen, dim)
-
-index.iterate_over_parts()
-
-"""
+if __name__=='__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--checkpoint', type=str, default='liuqi6777/jina-colbert-v2-round3')
+    parser.add_argument('--experiment', type=str, default='msmarco')
+    parser.add_argument('--index_name', type=str, default='colbert.round3.nbit=2.index')
+    parser.add_argument('--collection', type=str, default='data/MSMARCO/collection.tsv')
+    parser.add_argument('--doc_maxlen', type=int, default=300)
+    args = parser.parse_args()
+    main(args)
