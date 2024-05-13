@@ -56,3 +56,7 @@ def generate_triples(ranking : Ranking, args : Namespace) -> Examples:
     triples = Triples(ranking)
     triples.create(positives, depth)
     triples.save(args.triples_save_path)
+
+if __name__ == "__main__":
+    # parse args
+    pass

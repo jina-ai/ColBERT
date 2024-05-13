@@ -1,4 +1,4 @@
-from colbert.infra.config.config import ColBERTConfig
+from colbert.infra import ColBERTConfig
 from colbert.search.strided_tensor import StridedTensor
 from colbert.utils.utils import print_message, flatten
 from colbert.modeling.base_colbert import BaseColBERT
@@ -11,6 +11,22 @@ import os
 import pathlib
 from torch.utils.cpp_extension import load
 
+
+import sys
+import pdb
+
+class ForkedPdb(pdb.Pdb):
+    """A Pdb subclass that may be used
+    from a forked multiprocessing child
+
+    """
+    def interaction(self, *args, **kwargs):
+        _stdin = sys.stdin
+        try:
+            sys.stdin = open('/dev/stdin')
+            pdb.Pdb.interaction(self, *args, **kwargs)
+        finally:
+            sys.stdin = _stdin
 
 class ColBERT(BaseColBERT):
     """
@@ -51,6 +67,8 @@ class ColBERT(BaseColBERT):
         cls.loaded_extensions = True
 
     def forward(self, Q, D):
+
+        # ForkedPdb().set_trace()
         Q = self.query(*Q)
         D, D_mask = self.doc(*D, keep_dims='return_mask')
 
@@ -119,6 +137,8 @@ class ColBERT(BaseColBERT):
         if self.colbert_config.similarity == 'l2':
             assert self.colbert_config.interaction == 'colbert'
             return (-1.0 * ((Q.unsqueeze(2) - D_padded.unsqueeze(1))**2).sum(-1)).max(-1).values.sum(-1)
+            # (-1.0 * ((x.unsqueeze(2) - y.unsqueeze(1))**2).sum(-1)).max(-1)
+            # compute l2 distance between all Q and D tokens, max over Doc (e.g. largest interaction per query token) then sum those
         return colbert_score(Q, D_padded, D_mask, config=self.colbert_config)
 
     def mask(self, input_ids, skiplist):

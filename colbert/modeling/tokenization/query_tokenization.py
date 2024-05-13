@@ -71,7 +71,8 @@ class QueryTokenizer():
             # Max length is the default max length from the config
             max_length = self.query_maxlen
 
-        obj = self.tok(batch_text, padding='max_length', truncation=True,
+        padding = 'max_length' if self.config.attend_to_mask_tokens else 'longest'
+        obj = self.tok(batch_text, padding=padding, truncation=True,
                        return_tensors='pt', max_length=max_length).to(DEVICE)
 
         ids, mask = obj['input_ids'], obj['attention_mask']

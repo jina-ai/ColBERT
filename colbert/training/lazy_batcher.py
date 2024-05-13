@@ -11,6 +11,8 @@ from colbert.data.collection import Collection
 from colbert.data.queries import Queries
 from colbert.data.examples import Examples
 
+from typing import List
+
 # from colbert.utils.runs import Run
 
 
@@ -64,7 +66,7 @@ class LazyBatcher():
 
         return self.collate(all_queries, all_passages, all_scores)
 
-    def collate(self, queries, passages, scores):
+    def collate(self, queries : List[str], passages : List[str], scores : List[float]):
         assert len(queries) == self.bsize
         assert len(passages) == self.nway * self.bsize
 

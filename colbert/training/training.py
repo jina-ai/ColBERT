@@ -3,6 +3,8 @@ import torch
 import random
 import torch.nn as nn
 import numpy as np
+import wandb
+from tqdm import tqdm
 
 from transformers import AdamW, get_linear_schedule_with_warmup
 from colbert.infra import ColBERTConfig
@@ -12,7 +14,7 @@ from colbert.utils.amp import MixedPrecisionManager
 from colbert.training.lazy_batcher import LazyBatcher
 from colbert.parameters import DEVICE
 
-from colbert.modeling.colbert import ColBERT
+from colbert.modeling.colbert import ColBERT, ForkedPdb
 from colbert.modeling.reranker.electra import ElectraReranker
 
 from colbert.utils.utils import print_message
@@ -24,6 +26,7 @@ def train(config: ColBERTConfig, triples, queries=None, collection=None):
     config.checkpoint = config.checkpoint or 'bert-base-uncased'
 
     if config.rank < 1:
+        run = wandb.init(project="jina-colbert", group="distributed_training")
         config.help()
 
     random.seed(12345)
@@ -45,7 +48,9 @@ def train(config: ColBERTConfig, triples, queries=None, collection=None):
         raise NotImplementedError()
 
     if not config.reranker:
+        # ForkedPdb().set_trace()
         colbert = ColBERT(name=config.checkpoint, colbert_config=config)
+        # ForkedPdb().set_trace()
     else:
         colbert = ElectraReranker.from_pretrained(config.checkpoint)
 
@@ -84,13 +89,16 @@ def train(config: ColBERTConfig, triples, queries=None, collection=None):
 
     #     reader.skip_to_batch(start_batch_idx, checkpoint['arguments']['bsize'])
 
-    for batch_idx, BatchSteps in zip(range(start_batch_idx, config.maxsteps), reader):
+    progress_bar = tqdm(zip(range(start_batch_idx, config.maxsteps), reader), desc="Training Steps")
+    for batch_idx, BatchSteps in progress_bar:
         if (warmup_bert is not None) and warmup_bert <= batch_idx:
             set_bert_grad(colbert, True)
             warmup_bert = None
 
         this_batch_loss = 0.0
 
+        # WHY IN THE WORLD WOULD YOU CALL IT BATCH IF ITS A SINGLE INSTANCE
+        # INSIDE A BATCH, OMAR?
         for batch in BatchSteps:
             with amp.context():
                 try:
@@ -101,6 +109,8 @@ def train(config: ColBERTConfig, triples, queries=None, collection=None):
                     encoding = [encoding.to(DEVICE)]
 
                 scores = colbert(*encoding)
+
+                ForkedPdb().set_trace()
 
                 if config.use_ib_negatives:
                     scores, ib_loss = scores
@@ -118,15 +128,12 @@ def train(config: ColBERTConfig, triples, queries=None, collection=None):
                     loss = nn.CrossEntropyLoss()(scores, labels[:scores.size(0)])
 
                 if config.use_ib_negatives:
-                    if config.rank < 1:
-                        print('\t\t\t\t', loss.item(), ib_loss.item())
-
                     loss += ib_loss
 
                 loss = loss / config.accumsteps
+                if config.rank < 1:
+                    run.log({"train_loss" : loss})
 
-            if config.rank < 1:
-                print_progress(scores)
 
             amp.backward(loss)
 
@@ -138,13 +145,14 @@ def train(config: ColBERTConfig, triples, queries=None, collection=None):
         amp.step(colbert, optimizer, scheduler)
 
         if config.rank < 1:
-            print_message(batch_idx, train_loss)
+            # log loss to progress bar and wandb
+            progress_bar.set_postfix(loss=round(train_loss, 4))
             manage_checkpoints(config, colbert, optimizer, batch_idx+1, savepath=None)
 
     if config.rank < 1:
         print_message("#> Done with all triples!")
         ckpt_path = manage_checkpoints(config, colbert, optimizer, batch_idx+1, savepath=None, consumed_all_triples=True)
-
+        run.finish()
         return ckpt_path  # TODO: This should validate and return the best checkpoint, not just the last one.
 
 
