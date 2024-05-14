@@ -26,6 +26,7 @@ from colbert.data.utils import log_on_rank
 
 csv.field_size_limit(sys.maxsize)
 
+
 class InputType(IntEnum):
     PAIR = 2
     TRIPLET = 3
@@ -55,17 +56,17 @@ class S3Dataset(IterableDataset):
         self,
         bucket: str,
         dataset: str,
-        fabric : Fabric,
+        fabric: Fabric,
         input_type_dict: Dict[str, str],
         task_type: Optional[str] = None,
         directory: Optional[str] = None,
         max_shards: Optional[int] = None,
-        dialect: Literal['csv', 'tsv'] = 'tsv',
+        dialect: Literal["csv", "tsv"] = "tsv",
         shard_num: int = 0,
         index: Optional[int] = None,
-        ce_model_name='intfloat/simlm-msmarco-reranker',
+        ce_model_name="intfloat/simlm-msmarco-reranker", # TODO: choose a suitable commerical default
         interleaved=False,
-        task_implementation: Literal['none', 'instruction-based'] = 'none',
+        task_implementation: Literal["none", "instruction-based"] = "none",
     ):
         """A dataset that iterates through shards of a dataset stored
             in an S3 bucket.
@@ -102,11 +103,11 @@ class S3Dataset(IterableDataset):
             bucket_name=self._bucket, dataset=self._dataset, directory=directory
         )
 
-        assert dataset in input_type_dict or '*' in input_type_dict
+        assert dataset in input_type_dict or "*" in input_type_dict
         input_type = (
             input_type_dict[dataset]
             if dataset in input_type_dict
-            else input_type_dict['*']
+            else input_type_dict["*"]
         )
         self._tuple_len = get_tuple_length(input_type)
 
@@ -114,11 +115,11 @@ class S3Dataset(IterableDataset):
             InputType.SCORED_TRIPLET,
             InputType.MULTIPLE_NEGATIVES,
         ):
-            self._add_ce_scores = 'true'
+            self._add_ce_scores = "true"
         elif input_type == InputType.MULTIPLE_NEGATIVES_WITHOUT_SCORES:
-            self._add_ce_scores = 'zeros'
+            self._add_ce_scores = "zeros"
         else:
-            self._add_ce_scores = 'false'
+            self._add_ce_scores = "false"
 
         if input_type in (InputType.PAIR_WITH_SCORES, InputType.TEXT_WITH_LABEL):
             self._input_has_score = True
@@ -165,20 +166,20 @@ class S3Dataset(IterableDataset):
 
         log_on_rank(
             (
-                f'worker {rank}/{num_workers} taking shards {start_index} - '
-                f'{stop_index} for dataset {dataset}, total number of pairs: '
-                f'{self._num_pairs}'
+                f"worker {rank}/{num_workers} taking shards {start_index} - "
+                f"{stop_index} for dataset {dataset}, total number of pairs: "
+                f"{self._num_pairs}"
             )
         )
 
-        if self._add_ce_scores == 'true':
+        if self._add_ce_scores == "true":
             self._cross_encoder_model = self._load_ce_model(ce_model_name)
 
         self._tmpdir = tempfile.TemporaryDirectory()
         self._thread_pool = ThreadPoolExecutor(max_workers=1)
 
     def _load_ce_model(self, ce_model_name):
-        if ce_model_name.startswith('cross-encoder/'):
+        if ce_model_name.startswith("cross-encoder/"):
             from sentence_transformers import CrossEncoder
 
             return CrossEncoder(ce_model_name, max_length=512)
@@ -223,42 +224,42 @@ class S3Dataset(IterableDataset):
                 # There is no next shard
                 future_shard_pth = None
 
-            if shard_pth.endswith('.gz'):
-                file = gzip.open(shard_pth, 'rt')
-            elif shard_pth.endswith(f'.{self._dialect}'):
-                file = open(shard_pth, 'r')
+            if shard_pth.endswith(".gz"):
+                file = gzip.open(shard_pth, "rt")
+            elif shard_pth.endswith(f".{self._dialect}"):
+                file = open(shard_pth, "r")
             else:
-                raise ValueError(f'Shard {shard_pth} has unknown file extension.')
+                raise ValueError(f"Shard {shard_pth} has unknown file extension.")
 
             reader = csv.reader(
                 file,
-                dialect='excel-tab' if self._dialect == 'tsv' else 'excel',
+                dialect="excel-tab" if self._dialect == "tsv" else "excel",
             )
 
             for row in islice(reader, self._current_index, None, self._stride):
                 self._current_index += self._stride
                 assert len(row) >= self._tuple_len, (
-                    f'Dataset {self._dataset}, shard {shard}, '
-                    f'row {self._current_index}, row length '
-                    f'{len(row)}, tuple length {self._tuple_len}'
+                    f"Dataset {self._dataset}, shard {shard}, "
+                    f"row {self._current_index}, row length "
+                    f"{len(row)}, tuple length {self._tuple_len}"
                 )
                 out = [row[x] for x in range(self._tuple_len)]
-                if self._add_ce_scores == 'true':
+                if self._add_ce_scores == "true":
                     scores = self._get_ce_scores(*out)
-                elif self._add_ce_scores == 'false':
+                elif self._add_ce_scores == "false":
                     scores = None
-                elif self._add_ce_scores == 'zeros':
+                elif self._add_ce_scores == "zeros":
                     scores = [0.0] * (len(out) - 1)
                 else:
                     raise ValueError(
-                        f'add_ce_scores must be one of true, false, or zeros, '
-                        f'got {self._add_ce_scores}'
+                        f"add_ce_scores must be one of true, false, or zeros, "
+                        f"got {self._add_ce_scores}"
                     )
 
                 if self._input_has_score:
                     scores = [float(row[-1])]
 
-                if self._task_implementation == 'instruction-based':
+                if self._task_implementation == "instruction-based":
                     out = add_instruction(out, task_type=self._task_type)
 
                 yield self._dataset, (
@@ -273,7 +274,7 @@ class S3Dataset(IterableDataset):
 
     def cleanup(self):
         if self._tmpdir is not None:
-            log_on_rank(f'Cleaning up dataset {self._dataset}')
+            log_on_rank(f"Cleaning up dataset {self._dataset}")
             self._tmpdir.cleanup()
             self._tmpdir = None
             self._thread_pool.shutdown()
@@ -287,11 +288,11 @@ def _list_to_tuple(data):
 
 
 def _path_to_dir(pth: str) -> str:
-    return '/'.join(pth.split('/')[:-1])
+    return "/".join(pth.split("/")[:-1])
 
 
 def _path_to_name(pth: str) -> str:
-    return pth.split('/')[-1]
+    return pth.split("/")[-1]
 
 
 class MultiDataset(IterableDataset):
@@ -305,10 +306,10 @@ class MultiDataset(IterableDataset):
         max_shards: Optional[int] = None,
         sampling_rates: Optional[Dict[str, float]] = None,
         task_types: Optional[Dict[str, str]] = None,
-        task_implementation: Literal['none', 'instruction-based'] = 'none',
+        task_implementation: Literal["none", "instruction-based"] = "none",
         max_batches: Optional[int] = None,
         num_batches: int = 0,
-        dialect: Literal['csv', 'tsv'] = 'tsv',
+        dialect: Literal["csv", "tsv"] = "tsv",
         rng_state: Optional[Union[Tuple, List]] = None,
         seed: int = 0,
         absolute_sampling_rates: bool = False,
@@ -322,7 +323,9 @@ class MultiDataset(IterableDataset):
         :param fabric: A fabric instance to get information about the current process'
             rank.
         :param batch_size: The number of pairs in a single batch, used to determine
-            the number of pairs to yield before changing datasets.
+            the number of pairs to yield before changing datasets. Note that this 
+            does not actually handle the batching *logic* of returning batch_size 
+            inputs per next(), that still needs to be done by a DataLoader.
         :param datasets: A list of datasets to create 'torch.utils.data.Dataset'
             instances for. Each dataset should specify the complete path within
             the S3 bucket.
@@ -390,13 +393,13 @@ class MultiDataset(IterableDataset):
                     input_type_dict=input_type_dict,
                     task_type=self._task_types.get(ds_path),
                     task_implementation=self._task_implementation,
-                    max_shards=dataset['max_shards'],
-                    dialect=dataset['dialect'],
-                    shard_num=dataset['current_shard_num'],
-                    index=dataset['current_index'],
+                    max_shards=dataset["max_shards"],
+                    dialect=dataset["dialect"],
+                    shard_num=dataset["current_shard_num"],
+                    index=dataset["current_index"],
                     **(
-                        {'ce_model_name': kwargs['ce_model_name']}
-                        if 'ce_model_name' in kwargs
+                        {"ce_model_name": kwargs["ce_model_name"]}
+                        if "ce_model_name" in kwargs
                         else {}
                     ),
                 )
@@ -412,9 +415,9 @@ class MultiDataset(IterableDataset):
                 provided_rates = set(sampling_rates.keys())
                 if provided_rates != required_rates:
                     raise ValueError(
-                        f'Trying to use absolute sampling rates, but provided'
-                        f'rates do not match datasets. Got sampling rates for '
-                        f'{provided_rates} but need {required_rates}.'
+                        f"Trying to use absolute sampling rates, but provided"
+                        f"rates do not match datasets. Got sampling rates for "
+                        f"{provided_rates} but need {required_rates}."
                     )
                 self._sampling_rates = sampling_rates
             else:
@@ -424,8 +427,8 @@ class MultiDataset(IterableDataset):
                         self._sampling_rates[key] = self._sampling_rates[key] * value
                     else:
                         raise ValueError(
-                            f'Sampling rate given for {key} has no '
-                            f'corresponding dataset.'
+                            f"Sampling rate given for {key} has no "
+                            f"corresponding dataset."
                         )
 
         for ds_path, dataset in list(self._datasets.items()):
@@ -460,7 +463,7 @@ class MultiDataset(IterableDataset):
                 try:
                     yield next(sources[dataset])
                 except StopIteration:
-                    log_on_rank(f'reached the end of dataset {dataset}, rebuilding')
+                    log_on_rank(f"reached the end of dataset {dataset}, rebuilding")
                     self._datasets[dataset].cleanup()
                     self._datasets[dataset] = self.rebuild_dataset(
                         dataset, self._fabric
@@ -489,25 +492,25 @@ class MultiDataset(IterableDataset):
 
     def state_dict(self):
         return {
-            'bucket': self._bucket,
-            'batch_size': self._batch_size,
-            'datasets': {
+            "bucket": self._bucket,
+            "batch_size": self._batch_size,
+            "datasets": {
                 ds_path: {
-                    'current_shard_num': dataset._current_shard_num,
-                    'current_index': dataset._current_index,
-                    'dialect': dataset._dialect,
-                    'max_shards': dataset._max_shards,
+                    "current_shard_num": dataset._current_shard_num,
+                    "current_index": dataset._current_index,
+                    "dialect": dataset._dialect,
+                    "max_shards": dataset._max_shards,
                 }
                 for ds_path, dataset in self._datasets.items()
             },
-            'sampling_rates': self._sampling_rates,
-            'task_types': self._task_types,
-            'task_implementation': self._task_implementation,
-            'max_batches': self._max_batches,
-            'num_batches': self._num_batches,
-            'input_type_dict': self._input_type_dict,
-            'rng': self._rng.getstate(),
-            'synchronous': self._synchronous,
+            "sampling_rates": self._sampling_rates,
+            "task_types": self._task_types,
+            "task_implementation": self._task_implementation,
+            "max_batches": self._max_batches,
+            "num_batches": self._num_batches,
+            "input_type_dict": self._input_type_dict,
+            "rng": self._rng.getstate(),
+            "synchronous": self._synchronous,
         }
 
     def cleanup(self):
@@ -517,18 +520,18 @@ class MultiDataset(IterableDataset):
     @classmethod
     def load_state_dict(cls, state_dict, fabric):
         return cls(
-            bucket=state_dict['bucket'],
+            bucket=state_dict["bucket"],
             fabric=fabric,
-            input_type_dict=state_dict['input_type_dict'],
-            datasets=state_dict['datasets'],
-            sampling_rates=state_dict['sampling_rates'],
-            task_types=state_dict['task_types'],
-            task_implementation=state_dict['task_implementation'],
-            batch_size=state_dict['batch_size'],
-            max_batches=state_dict['max_batches'],
-            num_batches=state_dict['num_batches'],
-            rng_state=state_dict['rng'],
-            synchronous=state_dict['synchronous'],
+            input_type_dict=state_dict["input_type_dict"],
+            datasets=state_dict["datasets"],
+            sampling_rates=state_dict["sampling_rates"],
+            task_types=state_dict["task_types"],
+            task_implementation=state_dict["task_implementation"],
+            batch_size=state_dict["batch_size"],
+            max_batches=state_dict["max_batches"],
+            num_batches=state_dict["num_batches"],
+            rng_state=state_dict["rng"],
+            synchronous=state_dict["synchronous"],
         )
 
     def write_to_json(self, fname: str):
@@ -536,14 +539,14 @@ class MultiDataset(IterableDataset):
         try:
             if not os.path.exists(directory_path):
                 os.makedirs(directory_path)
-            with open(fname, 'w') as json_file:
+            with open(fname, "w") as json_file:
                 json.dump(self.state_dict(), json_file)
         except Exception:
-            log_on_rank('File already exist, skipping.')  # avoid race condition
+            log_on_rank("File already exist, skipping.")  # avoid race condition
 
     @classmethod
     def load_from_json(cls, fname: str, fabric):
-        with open(fname, 'r') as json_file:
+        with open(fname, "r") as json_file:
             return cls.load_state_dict(json.load(json_file), fabric)
 
     @property
@@ -555,9 +558,9 @@ if __name__ == "__main__":
 
     fabric = Fabric(accelerator="cpu")
     dataset_types = {
-        "*" : InputType.MULTIPLE_NEGATIVES_WITHOUT_SCORES,
+        "*": InputType.MULTIPLE_NEGATIVES_WITHOUT_SCORES,
     }
-    
+
     dataset = MultiDataset(
         bucket="embedding-datasets",
         fabric=fabric,

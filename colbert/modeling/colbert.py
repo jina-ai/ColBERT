@@ -105,10 +105,12 @@ class ColBERT(BaseColBERT):
         Q = self.bert(input_ids, attention_mask=attention_mask)[0]
         Q = self.linear(Q)
 
-        mask = torch.tensor(self.mask(input_ids, skiplist=[]), device=self.device).unsqueeze(2).float()
+        # Normalize *then* mask to avoid NaN on masked embeddings
+        Q = torch.nn.functional.normalize(Q, p=2, dim=2)
+        mask = torch.tensor(self.mask(input_ids, skiplist=[]), device=self.device).unsqueeze(2).type(Q.dtype)
         Q = Q * mask
 
-        return torch.nn.functional.normalize(Q, p=2, dim=2)
+        return Q
 
     def doc(self, input_ids, attention_mask, keep_dims=True):
         assert keep_dims in [True, False, 'return_mask']
@@ -116,12 +118,16 @@ class ColBERT(BaseColBERT):
         input_ids, attention_mask = input_ids.to(self.device), attention_mask.to(self.device)
         D = self.bert(input_ids, attention_mask=attention_mask)[0]
         D = self.linear(D)
-        mask = torch.tensor(self.mask(input_ids, skiplist=self.skiplist), device=self.device).unsqueeze(2).float()
-        D = D * mask
 
+        # Normalize *then* mask to avoid NaN on masked embeddings
         D = torch.nn.functional.normalize(D, p=2, dim=2)
-        if self.use_gpu:
-            D = D.half()
+
+        mask = torch.tensor(self.mask(input_ids, skiplist=self.skiplist), device=self.device).unsqueeze(2).type(D.dtype)
+        D = D * mask
+        
+        # TODO: removing for now/debugging PyTorch Lightning precision.
+        # if self.use_gpu:
+        #     D = D.half()
 
         if keep_dims is False:
             D, mask = D.cpu(), mask.bool().cpu().squeeze(-1)

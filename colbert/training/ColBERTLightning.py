@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 
 from lightning import Trainer, LightningModule
 from lightning.fabric.fabric import Fabric
+from lightning.pytorch.loggers import WandbLogger
 
 from typing import Dict, List, Union, Tuple, Any
 
@@ -12,6 +13,11 @@ from transformers import AdamW, get_linear_schedule_with_warmup
 from colbert.data.dataset import InputType, MultiDataset
 from colbert.modeling.colbert import ColBERT, ForkedPdb
 from colbert.infra.config import ColBERTConfig
+from colbert.data.collate import collate
+from colbert.modeling.tokenization import QueryTokenizer, DocTokenizer
+
+from functools import partial
+from loguru import logger
 
 
 class ColBERTLightning(LightningModule):
@@ -19,6 +25,7 @@ class ColBERTLightning(LightningModule):
         super().__init__()
         self.config = config
         self.colbert = ColBERT(name=config.checkpoint, colbert_config=self.config)
+        self.save_hyperparameters()
 
     def configure_optimizers(self):
         optimizer = AdamW(
@@ -43,58 +50,67 @@ class ColBERTLightning(LightningModule):
         ],  # TODO: ammend typing for when we support supervised scores
         batch_idx: int,
     ) -> Tensor:
-        # Tokenizer outputs: Tuple(input_ids, attention_mask)
+        # Dimensions commented above variable: 
+        # b = bsize, h = hidden_dim, n = nway, q = max_qlen, d = max_dlen
+
+        # Tokenizer output format: Tuple(input_ids, attention_mask)
         # b x q
         queries, query_mask = batch["queries"]
         # b x d
         positives, positive_mask = batch["positives"]
-        # (b * n) x d
-        negatives, negative_mask = batch["negatives"]
-
-        # TODO: Should I replace self.colbert .query() and .doc() logic?
-        # probably not, want to leave colbert as alone as possible so model can be loaded directly
-        # for unchanged indexing/search logic
-
-        ForkedPdb().set_trace()
+        # Note that colbert.query() and doc() normalize along the h dim
         # b x q x h
         queries = self.colbert.query(queries, query_mask)
         # b x d x h
         positives = self.colbert.doc(positives, positive_mask)
         # b x b x d x h
-        positives = positives.unsqueeze(1).repeat(1, positives.size(0), 1, 1)
-        # (b * n) x d x h
-        negatives = self.colbert.doc(negatives, negative_mask)
-        # b x n x d x h
-        negatives = negatives.reshape(
-            positives.size(0), -1, negatives.size(1), negatives.size(2)
-        )
-        # b x (b + n) x d x h
-        print(f"{negatives.shape} {positives.shape}")
-        documents = torch.cat((positives, negatives), dim=1)
+        # For in-batch negatives, stack the positives so that each query 
+        # computes an interaction with each positive
+        positives = positives.unsqueeze(0).repeat(positives.size(0), 1, 1, 1)
+
+        if "negatives" in batch:
+            # expect the flattened negatives from the batch to be compatible with colbert.doc()
+            # (b * n) x d
+            negatives, negative_mask = batch["negatives"]
+            # (b * n) x d x h
+            negatives = self.colbert.doc(negatives, negative_mask)
+            # b x n x d x h
+            negatives = negatives.reshape(
+                positives.size(0), -1, negatives.size(1), negatives.size(2)
+            )
+            # b x (b + n) x d x h
+            documents = torch.cat((positives, negatives), dim=1)
+        else:
+            documents = positives
         # By construction the diagonal documents are the relevant ones
-        labels = torch.arange(documents.size(0), dtype=torch.long)
-
-        B_q, Q, H_q = queries.shape
-        B_d, N, D, H_d = documents.shape
-
-        assert B_q == self.config.bsize
-        assert B_q == B_d
-        assert H_q == H_d
-        assert N == B_q + self.config.nway
-
-        # Dimensions: b = bsize, h = hidden_dim, n = nway, q = max_qlen, d = max_dlen
-
+        labels = torch.arange(
+            documents.size(0),
+            dtype=torch.long,
+            device=self.device,
+        )
         # expand dims to do token interaction (similarity metric)
         # queries : b x 1 x q x 1 x h
         # documents : b x n x 1 x d x h
         queries = queries[:, None, :, None, :]
         documents = documents[:, :, None, :, :]
 
-        if self.config.similarity == "l2":
+        if self.config.similarity == "cosine":
+            # vectors are normalized along h dim by colbert.query() and doc()
+            # so cosine similarity is just dot product
+            # any interaction involving a masked token will be 0 
+            # (and therefore not contribute, as desired)
             # all_tok_scores : b x n x q x d
-            all_tok_scores = -1 * (queries - documents).pow(2).sum(-1)
+            all_tok_scores = torch.einsum("bXqXh,bnXdh->bnqd", queries, documents)
         else:
-            raise ValueError("cosine similarity not supported yet")
+            raise ValueError("l2 similarity not supported yet")
+        
+        # if self.config.similarity == "l2":
+        #     # Negative so that max takes smallest l2 dist
+        #     # all_tok_scores : b x n x q x d
+        #     # TODO: is this even correct for masked tokens? 
+        #     # is the l2 distance with 0's the worst one can do?
+        #     # No. that distance is 1, but e.g. an antipode, would be 2.
+        #     all_tok_scores = -1 * (queries - documents).pow(2).sum(-1)
 
         # -> max over max_dlen dimension
         # max_qtok_scores : b x (b + n) x q
@@ -105,9 +121,8 @@ class ColBERTLightning(LightningModule):
 
         # compute loss on scores
         loss = torch.nn.CrossEntropyLoss()(scores, labels)
-        self.log({"train_loss": loss})
+        self.log("train_loss", loss.item(), on_step=True, prog_bar=True)
         return loss
-
 
 if __name__ == "__main__":
     from colbert.training.directory_batcher import TripletDataset
@@ -116,37 +131,61 @@ if __name__ == "__main__":
     config = ColBERTConfig(
         checkpoint="colbert-ir/colbertv1.9",
         warmup=10,
+        similarity="cosine",
+        bsize=16,
     )
 
     dataset_types = {
         "*": InputType.MULTIPLE_NEGATIVES_WITHOUT_SCORES,
+        # "*": InputType.PAIR,
     }
 
+    # I'm sure this will bite me in the ass in the future...
     fabric = Fabric()
 
     dataset = MultiDataset(
         bucket="embedding-datasets",
         fabric=fabric,
-        batch_size=16,
+        batch_size=config.bsize,
         input_type_dict=dataset_types,
         datasets=[
-            "en/triplets-multiple-negatives/msmarco-bge",
-            "en/triplets-multiple-negatives/nq-bge",
+            # "en/pairs_dedup/msmarco"
+            # "en/triplets-multiple-negatives/msmarco-bge", # multiple negatives no scores
+            "en/triplets-multiple-negatives/nq-bge", # multiple negatives no scores
         ],
         max_shards=1,
         dialect="tsv",
+    )
+
+    query_tokenizer = QueryTokenizer(config)
+    doc_tokenizer = DocTokenizer(config)
+
+    collate_fn = partial(
+        collate,
+        config,
+        query_tokenizer,
+        doc_tokenizer,
+        dataset_types,
     )
 
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=config.bsize,
         num_workers=0,
+        collate_fn=collate_fn,
     )
+
+    wandb_logger = WandbLogger(project="jina-colbert")
+
+    torch.set_float32_matmul_precision('medium')
 
     trainer = L.Trainer(
         devices=1,
         accelerator="gpu",
-        fast_dev_run=True,
+        precision=16,
+        fast_dev_run=64,
+        max_steps=1024,
+        logger=wandb_logger,
     )
 
     model = ColBERTLightning(config)

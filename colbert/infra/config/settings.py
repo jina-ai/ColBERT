@@ -151,7 +151,7 @@ class TrainingSettings:
 
     distillation_alpha: float = DefaultVal(1.0)
 
-    ignore_scores: bool = DefaultVal(False)
+    ignore_scores: bool = DefaultVal(True)
 
     model_name: str = DefaultVal(None) # DefaultVal('bert-base-uncased')
 
