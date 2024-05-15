@@ -26,8 +26,9 @@ if __name__ == "__main__":
             doc_maxlen=500,
             attend_to_mask_tokens=False,
             root="experiments",
-            gpus="0",
+            gpus=0,
             avoid_fork_if_possible=True,
+            ignore_scores=False,
         )
 
         trainer = Trainer(

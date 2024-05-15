@@ -57,7 +57,7 @@ def find_class_names(model_type, class_type):
 
 
 def class_factory(name_or_path):
-    loadedConfig  = AutoConfig.from_pretrained(name_or_path, trust_remote_code=True)
+    loadedConfig  = AutoConfig.from_pretrained(name_or_path, trust_remote_code=True, use_auth_token=True)
 
     if getattr(loadedConfig, "auto_map", None) is None:
         model_type = loadedConfig.model_type

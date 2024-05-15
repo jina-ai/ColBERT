@@ -1,0 +1,51 @@
+model:
+  name: "jinaai/jina-xlm-roberta-base-8k"
+resources:
+  accelerator: gpu
+  devices: [0]
+  precision: 16-mixed
+hyperparameters:
+  loss: InfoNCE
+  optimizer:
+    name: AdamW
+    options:
+      lr: 3.0e-6
+      betas:
+        - 0.9
+        - 0.999
+      eps: 1.0e-8
+      weight_decay: 0.01
+      amsgrad: False
+    epochs: 1
+    gradient_accumulation_steps: 1
+  scheduler:
+    name: linear-warmup
+    options:
+      num_warmup_steps: 10_000
+      num_training_steps:1_000_000
+dataset:
+  s3_bucket: "embedding-datasets"
+  datasets: 
+   "en/triplets-multiple-negatives/msmarco-bge" : MULTIPLE_NEGATIVES_WITHOUT_SCORES
+   "en/triplets-multiple-negatives/nq-bge" : MULTIPLE_NEGATIVES_WITHOUT_SCORES
+  max_shards: None
+  dialect: tsv
+dataloader:
+  batch_size: 32
+  num_workers: 0
+  num_negatives: 8
+tokenizer:
+  query_token: "[QueryMarker]"
+  doc_token: "[DocMarker]"
+  query_maxlen: 256
+  doc_maxlen: 8192
+interaction:
+  similarity: cosine
+  mask_punctuation: True
+  attend_to_mask_tokens: False
+wandb:
+  project: jina-colbert
+
+
+
+  

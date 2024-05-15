@@ -1,4 +1,5 @@
 import torch
+from transformers import AutoTokenizer
 
 from colbert.modeling.hf_colbert import class_factory
 from colbert.infra import ColBERTConfig
@@ -9,15 +10,24 @@ from colbert.parameters import DEVICE
 
 class QueryTokenizer():
     def __init__(self, config: ColBERTConfig, verbose: int = 3):
-        HF_ColBERT = class_factory(config.checkpoint)
-        self.tok = HF_ColBERT.raw_tokenizer_from_pretrained(config.checkpoint)
+
+        self.tok = AutoTokenizer.from_pretrained(config.model_name)
+
+        if not all(
+            token in self.tok.all_special_tokens
+            for token in (config.query_token, config.doc_token)
+        ):
+            # add tokens
+            self.tok.add_special_tokens(
+                {"additional_special_tokens": [config.query_token, config.doc_token]}
+            )
         self.verbose = verbose
 
         self.config = config
         self.query_maxlen = config.query_maxlen
         self.background_maxlen = 512 - self.query_maxlen + 1  # FIXME: Make this configurable
 
-        self.Q_marker_token, self.Q_marker_token_id = config.query_token, self.tok.convert_tokens_to_ids(config.query_token_id)
+        self.Q_marker_token, self.Q_marker_token_id = config.query_token, self.tok.convert_tokens_to_ids(config.query_token)
         self.cls_token, self.cls_token_id = self.tok.cls_token, self.tok.cls_token_id
         self.sep_token, self.sep_token_id = self.tok.sep_token, self.tok.sep_token_id
         self.mask_token, self.mask_token_id = self.tok.mask_token, self.tok.mask_token_id

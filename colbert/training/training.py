@@ -118,6 +118,7 @@ def train(config: ColBERTConfig, triples, queries=None, collection=None):
                 scores = scores.view(-1, config.nway)
 
                 if len(target_scores) and not config.ignore_scores:
+                    ForkedPdb().set_trace()
                     target_scores = torch.tensor(target_scores).view(-1, config.nway).to(DEVICE)
                     target_scores = target_scores * config.distillation_alpha
                     target_scores = torch.nn.functional.log_softmax(target_scores, dim=-1)

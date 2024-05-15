@@ -6,20 +6,19 @@ from torch import Tensor
 from transformers.tokenization_utils import PreTrainedTokenizer
 
 from colbert.infra import ColBERTConfig
-from colbert.modeling.tokenization import QueryTokenizer, DocTokenizer
+from colbert.modeling.tokenization import ColBERTTokenizer
 from colbert.data.utils import lookahead
 from colbert.data.dataset import InputType
 from colbert.utils.utils import zipstar
 
 
 def collate(
-    config: ColBERTConfig,
-    query_tokenizer: QueryTokenizer,
-    doc_tokenizer: DocTokenizer,
+    tokenizer: ColBERTTokenizer,
     input_type_dict: Dict[str, InputType],
+    num_negatives: int,
     batch: List[Tuple[str, Tuple[List[str], Union[List[float], None]]]],
 ) -> Dict[str, Union[Tuple[Tensor, Tensor], Tensor]]:
-
+    
     # data instances are always of the form (dataset_name, (out, scores))
     dataset_names, text_items_and_scores = zipstar(batch)
     text_items, scores = zipstar(text_items_and_scores)
@@ -38,14 +37,15 @@ def collate(
     input_type: InputType = input_type_dict.get(dataset_name, input_type_dict["*"])
 
     # tokenizers return (input_ids, attention_masks)
-    batch_output["queries"] = query_tokenizer.tensorize(
-        [splitline[0] for splitline in text_items]
+    batch_output["queries"] = tokenizer.tensorize(
+        [splitline[0] for splitline in text_items],
+        mode="query",
     )
-    
-    documents : List[str] = [splitline[1] for splitline in text_items]
+
+    documents: List[str] = [splitline[1] for splitline in text_items]
     bsize = len(documents)
 
-    use_negatives : bool = input_type in (
+    use_negatives: bool = input_type in (
         InputType.TRIPLET,
         InputType.SCORED_TRIPLET,
         InputType.MULTIPLE_NEGATIVES,
@@ -55,7 +55,7 @@ def collate(
     if use_negatives:
         # negatives : bsize x nway
         negatives: List[List[str]] = [
-            splitline[2 : config.nway + 2] for splitline in text_items
+            splitline[2 : num_negatives + 2] for splitline in text_items
         ]
 
         # must flatten them for doc tokenizer
@@ -63,10 +63,10 @@ def collate(
         negatives_flattened: List[str] = [neg for negs in negatives for neg in negs]
 
         documents.extend(negatives_flattened)
-    
+
     # (b + (b * n)) x max_doc_len
     # first b are positives, rest are negatives
-    document_tokens, document_masks = doc_tokenizer.tensorize(documents)
+    document_tokens, document_masks = tokenizer.tensorize(documents, mode="document")
 
     batch_output["positives"] = (document_tokens[:bsize], document_masks[:bsize])
 

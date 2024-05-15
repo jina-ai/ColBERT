@@ -105,8 +105,8 @@ class ColBERT(BaseColBERT):
         Q = self.bert(input_ids, attention_mask=attention_mask)[0]
         Q = self.linear(Q)
 
-        # Normalize *then* mask to avoid NaN on masked embeddings
-        Q = torch.nn.functional.normalize(Q, p=2, dim=2)
+        # Use small (but not too small for half-precision cutoff) epsilon to prevent NaNs
+        Q = torch.nn.functional.normalize(Q, p=2, dim=2, eps=1e-6)
         mask = torch.tensor(self.mask(input_ids, skiplist=[]), device=self.device).unsqueeze(2).type(Q.dtype)
         Q = Q * mask
 
@@ -120,7 +120,7 @@ class ColBERT(BaseColBERT):
         D = self.linear(D)
 
         # Normalize *then* mask to avoid NaN on masked embeddings
-        D = torch.nn.functional.normalize(D, p=2, dim=2)
+        D = torch.nn.functional.normalize(D, p=2, dim=2, eps=1e-6)
 
         mask = torch.tensor(self.mask(input_ids, skiplist=self.skiplist), device=self.device).unsqueeze(2).type(D.dtype)
         D = D * mask

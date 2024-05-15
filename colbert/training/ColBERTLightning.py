@@ -14,18 +14,49 @@ from colbert.data.dataset import InputType, MultiDataset
 from colbert.modeling.colbert import ColBERT, ForkedPdb
 from colbert.infra.config import ColBERTConfig
 from colbert.data.collate import collate
-from colbert.modeling.tokenization import QueryTokenizer, DocTokenizer
+from colbert.modeling.tokenization import ColBERTTokenizer
 
 from functools import partial
 from loguru import logger
 
 
 class ColBERTLightning(LightningModule):
-    def __init__(self, config: ColBERTConfig):
+    def __init__(self, config: DictConfig):
         super().__init__()
         self.config = config
-        self.colbert = ColBERT(name=config.checkpoint, colbert_config=self.config)
-        self.save_hyperparameters()
+
+        # initialize model
+        self.colbert = ColBERT(name=config.model_name, colbert_config=self.config)
+
+        # Extend colbert word embeddings to have query and doc markers
+        # resize_token_embeddings is idempotent if given the same vocabulary size
+        # so it doesn't matter if the embeddings are the correct size already,
+        # e.g. due to loading from a checkpoint
+        tokenizer = ColBERTTokenizer(config)
+        try:
+            # This should be sufficient for most *normal* models
+            self.colbert.model.base_model.resize_token_embeddings(len(tokenizer))
+        except:
+            # Our flash attention implementation of XLM-roberta hasn't implemented a number of methods,
+            # despite them probably being identical to PreTrainedModel
+            vocab_size = len(tokenizer)
+            old_embs = self.colbert.model.base_model.embeddings.word_embeddings
+            new_embs = torch.nn.Embedding(
+                len(tokenizer),
+                old_embs.embedding_dim,
+                device=old_embs.weight.device,
+                dtype=old_embs.weight.dtype,
+                padding_idx=old_embs.padding_idx,
+            )
+            # PreTrainedModel does this init, but our model doesn't seem to change
+            # anything from the original initialization
+            self.colbert.model.base_model._init_weights(new_embs)
+
+            # copy old weights over and replace old word embedding
+            # detach gets around an error about modifying tensors that require_grad,
+            # but still modifies the same underlying data.
+            new_embs.weight.detach()[:old_embs.num_embeddings, :] = old_embs.weight.detach()
+            self.colbert.model.base_model.embeddings.word_embeddings = new_embs
 
     def configure_optimizers(self):
         optimizer = AdamW(
@@ -50,7 +81,7 @@ class ColBERTLightning(LightningModule):
         ],  # TODO: ammend typing for when we support supervised scores
         batch_idx: int,
     ) -> Tensor:
-        # Dimensions commented above variable: 
+        # Dimensions commented above variable:
         # b = bsize, h = hidden_dim, n = nway, q = max_qlen, d = max_dlen
 
         # Tokenizer output format: Tuple(input_ids, attention_mask)
@@ -64,7 +95,7 @@ class ColBERTLightning(LightningModule):
         # b x d x h
         positives = self.colbert.doc(positives, positive_mask)
         # b x b x d x h
-        # For in-batch negatives, stack the positives so that each query 
+        # For in-batch negatives, stack the positives so that each query
         # computes an interaction with each positive
         positives = positives.unsqueeze(0).repeat(positives.size(0), 1, 1, 1)
 
@@ -97,20 +128,12 @@ class ColBERTLightning(LightningModule):
         if self.config.similarity == "cosine":
             # vectors are normalized along h dim by colbert.query() and doc()
             # so cosine similarity is just dot product
-            # any interaction involving a masked token will be 0 
+            # any interaction involving a masked token will be 0
             # (and therefore not contribute, as desired)
             # all_tok_scores : b x n x q x d
             all_tok_scores = torch.einsum("bXqXh,bnXdh->bnqd", queries, documents)
         else:
             raise ValueError("l2 similarity not supported yet")
-        
-        # if self.config.similarity == "l2":
-        #     # Negative so that max takes smallest l2 dist
-        #     # all_tok_scores : b x n x q x d
-        #     # TODO: is this even correct for masked tokens? 
-        #     # is the l2 distance with 0's the worst one can do?
-        #     # No. that distance is 1, but e.g. an antipode, would be 2.
-        #     all_tok_scores = -1 * (queries - documents).pow(2).sum(-1)
 
         # -> max over max_dlen dimension
         # max_qtok_scores : b x (b + n) x q
@@ -119,25 +142,33 @@ class ColBERTLightning(LightningModule):
         # scores : b x (b + n)
         scores = max_qtok_scores.sum(-1)
 
-        # compute loss on scores
-        loss = torch.nn.CrossEntropyLoss()(scores, labels)
+        # compute loss on scores with/out supervision
+        if "scores" in batch and not self.config.ignore_scores:
+            raise NotImplemented("Score supervision not supported yet")
+        else:
+            loss = torch.nn.CrossEntropyLoss()(scores, labels)
+        
         self.log("train_loss", loss.item(), on_step=True, prog_bar=True)
         return loss
+
 
 if __name__ == "__main__":
     from colbert.training.directory_batcher import TripletDataset
     import lightning as L
 
     config = ColBERTConfig(
-        checkpoint="colbert-ir/colbertv1.9",
-        warmup=10,
+        # model_name="jinaai/jina-xlm-roberta-base-8k",
+        model_name="colbert-ir/colbertv1.9",
+        checkpoint=None,
+        warmup=200,
         similarity="cosine",
-        bsize=16,
+        bsize=32,
+        lr=3e-6,
     )
 
     dataset_types = {
-        "*": InputType.MULTIPLE_NEGATIVES_WITHOUT_SCORES,
-        # "*": InputType.PAIR,
+        # "*": InputType.MULTIPLE_NEGATIVES_WITHOUT_SCORES,
+        "*": InputType.PAIR,
     }
 
     # I'm sure this will bite me in the ass in the future...
@@ -149,22 +180,20 @@ if __name__ == "__main__":
         batch_size=config.bsize,
         input_type_dict=dataset_types,
         datasets=[
-            # "en/pairs_dedup/msmarco"
+            "en/pairs_dedup/msmarco"
             # "en/triplets-multiple-negatives/msmarco-bge", # multiple negatives no scores
-            "en/triplets-multiple-negatives/nq-bge", # multiple negatives no scores
+            # "en/triplets-multiple-negatives/nq-bge",  # multiple negatives no scores
         ],
         max_shards=1,
         dialect="tsv",
     )
 
-    query_tokenizer = QueryTokenizer(config)
-    doc_tokenizer = DocTokenizer(config)
+    tokenizer = ColBERTTokenizer(config)
 
     collate_fn = partial(
         collate,
         config,
-        query_tokenizer,
-        doc_tokenizer,
+        tokenizer,
         dataset_types,
     )
 
@@ -177,14 +206,15 @@ if __name__ == "__main__":
 
     wandb_logger = WandbLogger(project="jina-colbert")
 
-    torch.set_float32_matmul_precision('medium')
+    torch.set_float32_matmul_precision("medium")
 
     trainer = L.Trainer(
-        devices=1,
         accelerator="gpu",
-        precision=16,
-        fast_dev_run=64,
-        max_steps=1024,
+        devices=[1],
+        # accelerator="cpu",
+        precision="16-mixed", # note that 16-true causes training instability immediately (NaN weights)
+        # fast_dev_run=64,
+        max_steps=4096,
         logger=wandb_logger,
     )
 
