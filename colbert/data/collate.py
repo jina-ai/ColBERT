@@ -7,7 +7,7 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 
 from colbert.infra import ColBERTConfig
 from colbert.modeling.tokenization import ColBERTTokenizer
-from colbert.data.utils import lookahead
+from colbert.data.utils import get_input_type, lookahead
 from colbert.data.dataset import InputType
 from colbert.utils.utils import zipstar
 
@@ -29,12 +29,12 @@ def collate(
     if None not in scores:
         batch_output["scores"] = scores
 
-    # Invariant: assumes dataset_name in dict and all names in batch are same
+    # Invariant: assumes dataset_name matches in dict and all names in batch are same
     # Should be the case according to MultiDataset's batch logic
     assert set((dataset_names[0],)) == set(dataset_names), dataset_names
     dataset_name = dataset_names[0]
-    # Either the dataset is in the dictionary or it is globbed with "*"
-    input_type: InputType = input_type_dict.get(dataset_name, input_type_dict["*"])
+    
+    input_type: InputType = get_input_type(input_type_dict, dataset_name)
 
     # tokenizers return (input_ids, attention_masks)
     batch_output["queries"] = tokenizer.tensorize(

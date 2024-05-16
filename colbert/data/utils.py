@@ -1,7 +1,9 @@
 import csv
+from enum import IntEnum
 import gzip
 import json
 import os
+import re
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from types import MappingProxyType
@@ -18,19 +20,42 @@ from transformers import (
     BatchEncoding,
 )
 
-s3_client = boto3.client('s3', region_name='eu-central-1')
+s3_client = boto3.client("s3", region_name="eu-central-1")
+
+class InputType(IntEnum):
+    PAIR = 2
+    TRIPLET = 3
+    SCORED_TRIPLET = 4
+    MULTIPLE_NEGATIVES = 5
+    MULTIPLE_NEGATIVES_WITHOUT_SCORES = 6
+    PAIR_WITH_SCORES = 7
+    TEXT_WITH_LABEL = 8
+
+
+def get_tuple_length(input_type: InputType):
+    if input_type in (InputType.PAIR, InputType.PAIR_WITH_SCORES):
+        return 2
+    elif input_type in (InputType.TRIPLET, InputType.SCORED_TRIPLET):
+        return 3
+    elif input_type in (InputType.TEXT_WITH_LABEL,):
+        return 1
+    elif input_type in (
+        InputType.MULTIPLE_NEGATIVES,
+        InputType.MULTIPLE_NEGATIVES_WITHOUT_SCORES,
+    ):
+        return 9
 
 
 INSTRUCTION_CONFIG = MappingProxyType(
     {
-        '': ('', ''),
-        'retrieval': ('Query: ', 'Document for retrieval: '),
-        'sts': ('Statement for clustering: ', 'Statement for clustering: '),
-        'reranking': ('Query: ', 'Document for reranking: '),
-        'clustering': ('Statement for clustering: ', 'Statement for clustering: '),
-        'classification': (
-            'Statement for classification: ',
-            'Statement for classification: ',
+        "": ("", ""),
+        "retrieval": ("Query: ", "Document for retrieval: "),
+        "sts": ("Statement for clustering: ", "Statement for clustering: "),
+        "reranking": ("Query: ", "Document for reranking: "),
+        "clustering": ("Statement for clustering: ", "Statement for clustering: "),
+        "classification": (
+            "Statement for classification: ",
+            "Statement for classification: ",
         ),
     }
 )
@@ -39,7 +64,7 @@ INSTRUCTION_CONFIG = MappingProxyType(
 class SimLMCrossEncoder:
     def __init__(
         self,
-        model_name: str = 'intfloat/simlm-msmarco-reranker',
+        model_name: str = "intfloat/simlm-msmarco-reranker",
         device: Optional[str] = None,
     ):
         self._model_name = model_name
@@ -50,20 +75,20 @@ class SimLMCrossEncoder:
         if device:
             self._device = device
         else:
-            self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
         self._model.eval()
         self._model.to(self._device)
 
     def predict(self, sentences: List[List[str]]) -> BatchEncoding:
         query, target = zip(*sentences)
-        target = [f'-: {x}' for x in target]
+        target = [f"-: {x}" for x in target]
         features = self._tokenizer(
             query,
             text_pair=target,
             max_length=192,
             padding=True,
             truncation=True,
-            return_tensors='pt',
+            return_tensors="pt",
         ).to(self._device)
         with torch.no_grad():
             return self._model(**features, return_dict=True).logits[:, 0].cpu().detach()
@@ -79,19 +104,19 @@ def get_shards(dataset: str, bucket_name: str, directory: Optional[str] = None):
             if os.path.isfile(fname):
                 shards.append(fname)
     else:  # remote s3 bucket
-        paginator = s3_client.get_paginator('list_objects_v2')
+        paginator = s3_client.get_paginator("list_objects_v2")
         pages = paginator.paginate(
-            Bucket=bucket_name, Prefix=f'{directory}/{dataset}/', Delimiter='/'
+            Bucket=bucket_name, Prefix=f"{directory}/{dataset}/", Delimiter="/"
         )
         try:
             shards = [
-                shard['Key']
+                shard["Key"]
                 for page in pages
-                for shard in page['Contents']
-                if shard['Key'] != f'{directory}/{dataset}/'
+                for shard in page["Contents"]
+                if shard["Key"] != f"{directory}/{dataset}/"
             ]
         except KeyError as e:
-            log_on_rank(f'KEY ERROR: {dataset}')
+            log_on_rank(f"KEY ERROR: {dataset}")
             raise e
 
     return shards
@@ -100,16 +125,16 @@ def get_shards(dataset: str, bucket_name: str, directory: Optional[str] = None):
 def get_tags(bucket_name: str, directory: Optional[str] = None):
     if directory is None:
         tags = s3_client.get_bucket_tagging(Bucket=bucket_name)
-        tags = {tag['Key']: int(tag['Value']) for tag in tags['TagSet']}
+        tags = {tag["Key"]: int(tag["Value"]) for tag in tags["TagSet"]}
     else:
         try:
             s3_client.download_file(
-                Bucket=bucket_name, Key=f'{directory}/sizes.json', Filename='sizes.json'
+                Bucket=bucket_name, Key=f"{directory}/sizes.json", Filename="sizes.json"
             )
-            with open('sizes.json', 'r') as file:
+            with open("sizes.json", "r") as file:
                 tags = json.load(file)
         except ClientError:
-            raise ValueError(f'No sizes file found in directory {directory}')
+            raise ValueError(f"No sizes file found in directory {directory}")
     return tags
 
 
@@ -117,19 +142,19 @@ def get_dataset_info(bucket_name, directory: Optional[str] = None):
     if directory is None:
         directory = bucket_name
     if os.path.exists(bucket_name):  # local path
-        datasets = os.listdir(f'{bucket_name}/{directory}')
+        datasets = os.listdir(f"{bucket_name}/{directory}")
     else:  # remote s3 bucket
         result = s3_client.list_objects(
-            Bucket=bucket_name, Prefix=f'{directory}/', Delimiter='/'
+            Bucket=bucket_name, Prefix=f"{directory}/", Delimiter="/"
         )
         datasets = []
-        for out in result.get('CommonPrefixes'):
-            datasets.append(out.get('Prefix')[len(directory) + 1 : -1])
+        for out in result.get("CommonPrefixes"):
+            datasets.append(out.get("Prefix")[len(directory) + 1 : -1])
     # try to get size info
     try:
         tags = get_tags(bucket_name, directory)
     except Exception:
-        log_on_rank(f'Could not retrieve size values for {bucket_name}/{directory}')
+        log_on_rank(f"Could not retrieve size values for {bucket_name}/{directory}")
         tags = {}
     dataset_dict = {}
     for dataset in datasets:
@@ -145,13 +170,13 @@ def download_shard(
     shard: str,
     target_dir: str,
 ):
-    fname = shard.split('/')[-1]
+    fname = shard.split("/")[-1]
     target_path = os.path.join(target_dir, fname)
     if os.path.exists(target_path):
         return target_path
     elif os.path.exists(shard):
         return shard
-    log_on_rank(f'Downloading shard {shard} from {source_bucket}')
+    log_on_rank(f"Downloading shard {shard} from {source_bucket}")
     s3_client.download_file(
         Bucket=source_bucket,
         Key=shard,
@@ -165,16 +190,16 @@ def get_shard_size(source_bucket: str, shard: str, dialect: str):
         shard_path = download_shard(
             source_bucket=source_bucket, shard=shard, target_dir=tmpdir
         )
-        if shard_path.endswith('.gz'):
-            with gzip.open(shard_path, 'rt') as gz_file:
+        if shard_path.endswith(".gz"):
+            with gzip.open(shard_path, "rt") as gz_file:
                 reader = csv.reader(
-                    gz_file, dialect='excel-tab' if dialect == 'tsv' else 'excel'
+                    gz_file, dialect="excel-tab" if dialect == "tsv" else "excel"
                 )
                 entries = list(reader)
-        elif shard_path.endswith(f'.{dialect}'):
-            with open(shard_path, 'r') as file:
+        elif shard_path.endswith(f".{dialect}"):
+            with open(shard_path, "r") as file:
                 reader = csv.reader(
-                    file, dialect='excel-tab' if dialect == 'tsv' else 'excel'
+                    file, dialect="excel-tab" if dialect == "tsv" else "excel"
                 )
                 entries = list(reader)
         if not os.path.exists(source_bucket):
@@ -212,21 +237,34 @@ def add_instruction(
     instruction_config: Dict[str, Tuple[str]] = INSTRUCTION_CONFIG,
 ):
     if task_type is None:
-        task_type = ''
+        task_type = ""
     first_prefix = instruction_config[task_type][0]
     remaining_prefixes = instruction_config[task_type][1]
     if len(texts) < 1:
-        raise ValueError('Texts must contain at least one element')
-    return [f'{first_prefix}{texts[0]}'] + [
-        f'{remaining_prefixes}{text}' for text in texts[1:]
+        raise ValueError("Texts must contain at least one element")
+    return [f"{first_prefix}{texts[0]}"] + [
+        f"{remaining_prefixes}{text}" for text in texts[1:]
     ]
+
 
 def get_rank(group=None):
     return torch_get_rank(group)
 
+
 def log_on_rank(message):
     try:
         rank = get_rank()
-        logger.debug(f'[rank={rank}]{message}')
+        logger.debug(f"[rank={rank}]{message}")
     except RuntimeError:
         logger.debug(message)
+
+
+def get_input_type(
+    input_pattern_type_dict: Dict[str, InputType], ds_path: str
+) -> InputType:
+    for pattern, input_type in input_pattern_type_dict.items():
+        if ds_path.endswith(pattern) or re.match(pattern.replace("*", ".*"), ds_path):
+            return input_type
+    raise ValueError(
+        f"Dataset {ds_path} did not match any pattern in input_types {input_pattern_type_dict}"
+    )

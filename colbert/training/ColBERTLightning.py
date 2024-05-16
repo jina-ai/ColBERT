@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
+from torch.optim import AdamW
 
 from lightning import Trainer, LightningModule
 from lightning.fabric.fabric import Fabric
@@ -8,7 +9,13 @@ from lightning.pytorch.loggers import WandbLogger
 
 from typing import Dict, List, Union, Tuple, Any
 
-from transformers import AdamW, get_linear_schedule_with_warmup
+from transformers import (
+    get_linear_schedule_with_warmup,
+    get_cosine_schedule_with_warmup,
+    get_scheduler,
+)
+
+from omegaconf import DictConfig
 
 from colbert.data.dataset import InputType, MultiDataset
 from colbert.modeling.colbert import ColBERT, ForkedPdb
@@ -21,28 +28,31 @@ from loguru import logger
 
 
 class ColBERTLightning(LightningModule):
-    def __init__(self, config: DictConfig):
+    def __init__(self, config: DictConfig, vocab_size: int):
         super().__init__()
         self.config = config
 
         # initialize model
-        self.colbert = ColBERT(name=config.model_name, colbert_config=self.config)
+        checkpoint: str | None = config.model.checkpoint
+        name_or_path = checkpoint if checkpoint is not None else config.model.name
+
+        # should be able to get away with just passing the name/checkpoint
+        # from which to load model weights
+        self.colbert = ColBERT(name=name_or_path, colbert_config=None)
 
         # Extend colbert word embeddings to have query and doc markers
         # resize_token_embeddings is idempotent if given the same vocabulary size
         # so it doesn't matter if the embeddings are the correct size already,
         # e.g. due to loading from a checkpoint
-        tokenizer = ColBERTTokenizer(config)
         try:
             # This should be sufficient for most *normal* models
-            self.colbert.model.base_model.resize_token_embeddings(len(tokenizer))
+            self.colbert.model.base_model.resize_token_embeddings(vocab_size)
         except:
             # Our flash attention implementation of XLM-roberta hasn't implemented a number of methods,
             # despite them probably being identical to PreTrainedModel
-            vocab_size = len(tokenizer)
             old_embs = self.colbert.model.base_model.embeddings.word_embeddings
             new_embs = torch.nn.Embedding(
-                len(tokenizer),
+                vocab_size,
                 old_embs.embedding_dim,
                 device=old_embs.weight.device,
                 dtype=old_embs.weight.dtype,
@@ -55,23 +65,35 @@ class ColBERTLightning(LightningModule):
             # copy old weights over and replace old word embedding
             # detach gets around an error about modifying tensors that require_grad,
             # but still modifies the same underlying data.
-            new_embs.weight.detach()[:old_embs.num_embeddings, :] = old_embs.weight.detach()
+            new_embs.weight.detach()[
+                : old_embs.num_embeddings, :
+            ] = old_embs.weight.detach()
             self.colbert.model.base_model.embeddings.word_embeddings = new_embs
 
     def configure_optimizers(self):
-        optimizer = AdamW(
-            filter(lambda p: p.requires_grad, self.colbert.parameters()),
-            lr=self.config.lr,
-            eps=1e-8,
+        parameters = filter(lambda p: p.requires_grad, self.colbert.parameters())
+        match self.config.hyperparameters.optimizer.name:
+            case "AdamW":
+                optimizer = AdamW(
+                    params=parameters, **self.config.hyperparameters.optimizer.options
+                )
+            case _:
+                raise NotImplemented(
+                    "Optimizer {self.config.hyperparameters.optimizer.name} is not supported"
+                )
+
+        scheduler = get_scheduler(
+            optimizer=optimizer,
+            **self.config.hyperparameters.scheduler,
         )
-        scheduler = get_linear_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=self.config.warmup,
-            num_training_steps=self.config.maxsteps,
-        )
+
         return {
             "optimizer": optimizer,
-            "lr_scheduler": scheduler,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
+            },
         }
 
     def training_step(
@@ -99,6 +121,9 @@ class ColBERTLightning(LightningModule):
         # computes an interaction with each positive
         positives = positives.unsqueeze(0).repeat(positives.size(0), 1, 1, 1)
 
+        # TODO: refactor this so that positives + negatives are run through colbert.doc() together? 
+        # (then split and reformatted to be recombined)
+        # currently w/ negatives has 3 sequential calls of ColBERT
         if "negatives" in batch:
             # expect the flattened negatives from the batch to be compatible with colbert.doc()
             # (b * n) x d
@@ -125,7 +150,7 @@ class ColBERTLightning(LightningModule):
         queries = queries[:, None, :, None, :]
         documents = documents[:, :, None, :, :]
 
-        if self.config.similarity == "cosine":
+        if self.config.interaction.similarity == "cosine":
             # vectors are normalized along h dim by colbert.query() and doc()
             # so cosine similarity is just dot product
             # any interaction involving a masked token will be 0
@@ -143,11 +168,11 @@ class ColBERTLightning(LightningModule):
         scores = max_qtok_scores.sum(-1)
 
         # compute loss on scores with/out supervision
-        if "scores" in batch and not self.config.ignore_scores:
+        if "scores" in batch and self.config.hyperparameters.loss == "KLDiv":
             raise NotImplemented("Score supervision not supported yet")
         else:
             loss = torch.nn.CrossEntropyLoss()(scores, labels)
-        
+
         self.log("train_loss", loss.item(), on_step=True, prog_bar=True)
         return loss
 
@@ -212,7 +237,7 @@ if __name__ == "__main__":
         accelerator="gpu",
         devices=[1],
         # accelerator="cpu",
-        precision="16-mixed", # note that 16-true causes training instability immediately (NaN weights)
+        precision="16-mixed",  # note that 16-true causes training instability immediately (NaN weights)
         # fast_dev_run=64,
         max_steps=4096,
         logger=wandb_logger,

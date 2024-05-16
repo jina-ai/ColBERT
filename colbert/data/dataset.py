@@ -15,6 +15,8 @@ from torch.utils.data import IterableDataset
 
 from colbert.data.utils import (
     SimLMCrossEncoder,
+    InputType,
+    get_tuple_length,
     add_instruction,
     download_shard,
     get_dataset_info,
@@ -25,31 +27,6 @@ from colbert.data.utils import (
 from colbert.data.utils import log_on_rank
 
 csv.field_size_limit(sys.maxsize)
-
-
-class InputType(IntEnum):
-    PAIR = 2
-    TRIPLET = 3
-    SCORED_TRIPLET = 4
-    MULTIPLE_NEGATIVES = 5
-    MULTIPLE_NEGATIVES_WITHOUT_SCORES = 6
-    PAIR_WITH_SCORES = 7
-    TEXT_WITH_LABEL = 8
-
-
-def get_tuple_length(input_type: InputType):
-    if input_type in (InputType.PAIR, InputType.PAIR_WITH_SCORES):
-        return 2
-    elif input_type in (InputType.TRIPLET, InputType.SCORED_TRIPLET):
-        return 3
-    elif input_type in (InputType.TEXT_WITH_LABEL,):
-        return 1
-    elif input_type in (
-        InputType.MULTIPLE_NEGATIVES,
-        InputType.MULTIPLE_NEGATIVES_WITHOUT_SCORES,
-    ):
-        return 9
-
 
 class S3Dataset(IterableDataset):
     def __init__(
@@ -98,7 +75,9 @@ class S3Dataset(IterableDataset):
         self._task_type = task_type
         self._task_implementation = task_implementation
 
-        self._dataset = dataset
+        self._dataset : str = dataset
+        # will be the thing actually yielded
+        self._path : str = "/".join((self._dataset, self._directory))
         shards = get_shards(
             bucket_name=self._bucket, dataset=self._dataset, directory=directory
         )
@@ -262,7 +241,8 @@ class S3Dataset(IterableDataset):
                 if self._task_implementation == "instruction-based":
                     out = add_instruction(out, task_type=self._task_type)
 
-                yield self._dataset, (
+                # yield self._path as those are what are matched to get InputType
+                yield self._path, (
                     out,
                     scores,
                 )
