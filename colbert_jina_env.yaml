@@ -1,0 +1,26 @@
+name: colbert_jina
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - faiss-gpu
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1
+  - lightning
+  - pip:
+    - transformers
+    - ujson
+    - rich
+    - wandb
+    - deepspeed
+    - omegaconf
+    - loguru
+    - hydra-core
+    - boto3
+    - gitpython
+    - aiohttp

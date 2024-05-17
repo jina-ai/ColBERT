@@ -12,7 +12,6 @@ from typing import Dict, List, Optional, Tuple
 import boto3
 from loguru import logger
 import torch
-from torch.distributed import get_rank as torch_get_rank
 from aiohttp import ClientError
 from transformers import (
     AutoModelForSequenceClassification,
@@ -116,7 +115,7 @@ def get_shards(dataset: str, bucket_name: str, directory: Optional[str] = None):
                 if shard["Key"] != f"{directory}/{dataset}/"
             ]
         except KeyError as e:
-            log_on_rank(f"KEY ERROR: {dataset}")
+            logger.info(f"KEY ERROR: {dataset}")
             raise e
 
     return shards
@@ -154,7 +153,7 @@ def get_dataset_info(bucket_name, directory: Optional[str] = None):
     try:
         tags = get_tags(bucket_name, directory)
     except Exception:
-        log_on_rank(f"Could not retrieve size values for {bucket_name}/{directory}")
+        logger.info(f"Could not retrieve size values for {bucket_name}/{directory}")
         tags = {}
     dataset_dict = {}
     for dataset in datasets:
@@ -176,7 +175,7 @@ def download_shard(
         return target_path
     elif os.path.exists(shard):
         return shard
-    log_on_rank(f"Downloading shard {shard} from {source_bucket}")
+    logger.debug(f"Downloading shard {shard} from {source_bucket}")
     s3_client.download_file(
         Bucket=source_bucket,
         Key=shard,
@@ -245,18 +244,6 @@ def add_instruction(
     return [f"{first_prefix}{texts[0]}"] + [
         f"{remaining_prefixes}{text}" for text in texts[1:]
     ]
-
-
-def get_rank(group=None):
-    return torch_get_rank(group)
-
-
-def log_on_rank(message):
-    try:
-        rank = get_rank()
-        logger.debug(f"[rank={rank}]{message}")
-    except RuntimeError:
-        logger.debug(message)
 
 
 def get_input_type(

@@ -9,6 +9,7 @@ from enum import IntEnum
 from concurrent.futures import ThreadPoolExecutor
 from itertools import islice
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from loguru import logger
 from lightning.fabric.fabric import Fabric
 
 from torch.utils.data import IterableDataset
@@ -24,7 +25,6 @@ from colbert.data.utils import (
     get_shard_size,
     get_shards,
 )
-from colbert.data.utils import log_on_rank
 
 csv.field_size_limit(sys.maxsize)
 
@@ -143,7 +143,7 @@ class S3Dataset(IterableDataset):
         else:
             self._num_pairs = 0
 
-        log_on_rank(
+        logger.debug(
             (
                 f"worker {rank}/{num_workers} taking shards {start_index} - "
                 f"{stop_index} for dataset {dataset}, total number of pairs: "
@@ -254,7 +254,7 @@ class S3Dataset(IterableDataset):
 
     def cleanup(self):
         if self._tmpdir is not None:
-            log_on_rank(f"Cleaning up dataset {self._dataset}")
+            logger.debug(f"Cleaning up dataset {self._dataset}")
             self._tmpdir.cleanup()
             self._tmpdir = None
             self._thread_pool.shutdown()
@@ -443,7 +443,7 @@ class MultiDataset(IterableDataset):
                 try:
                     yield next(sources[dataset])
                 except StopIteration:
-                    log_on_rank(f"reached the end of dataset {dataset}, rebuilding")
+                    logger.debug(f"reached the end of dataset {dataset}, rebuilding")
                     self._datasets[dataset].cleanup()
                     self._datasets[dataset] = self.rebuild_dataset(
                         dataset, self._fabric
@@ -522,7 +522,7 @@ class MultiDataset(IterableDataset):
             with open(fname, "w") as json_file:
                 json.dump(self.state_dict(), json_file)
         except Exception:
-            log_on_rank("File already exist, skipping.")  # avoid race condition
+            logger.info("File already exist, skipping.")  # avoid race condition
 
     @classmethod
     def load_from_json(cls, fname: str, fabric):
