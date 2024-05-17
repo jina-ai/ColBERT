@@ -59,15 +59,14 @@ class ColBERTLightning(LightningModule):
 
     def configure_optimizers(self):
         parameters = filter(lambda p: p.requires_grad, self.colbert.parameters())
-        match self.config.hyperparameters.optimizer.name:
-            case "AdamW":
-                optimizer = AdamW(
-                    params=parameters, **self.config.hyperparameters.optimizer.options
-                )
-            case _:
-                raise NotImplemented(
-                    "Optimizer {self.config.hyperparameters.optimizer.name} is not supported"
-                )
+        if self.config.hyperparameters.optimizer.name == "AdamW":
+            optimizer = AdamW(
+                params=parameters, **self.config.hyperparameters.optimizer.options
+            )
+        else:
+            raise NotImplemented(
+                "Optimizer {self.config.hyperparameters.optimizer.name} is not supported"
+            )
 
         scheduler = get_scheduler(
             optimizer=optimizer,
