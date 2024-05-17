@@ -97,8 +97,6 @@ def train(config: ColBERTConfig, triples, queries=None, collection=None):
 
         this_batch_loss = 0.0
 
-        # WHY IN THE WORLD WOULD YOU CALL IT BATCH IF ITS A SINGLE INSTANCE
-        # INSIDE A BATCH, OMAR?
         for batch in BatchSteps:
             with amp.context():
                 try:
