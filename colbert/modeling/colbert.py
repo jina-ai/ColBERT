@@ -15,19 +15,6 @@ from torch.utils.cpp_extension import load
 import sys
 import pdb
 
-class ForkedPdb(pdb.Pdb):
-    """A Pdb subclass that may be used
-    from a forked multiprocessing child
-
-    """
-    def interaction(self, *args, **kwargs):
-        _stdin = sys.stdin
-        try:
-            sys.stdin = open('/dev/stdin')
-            pdb.Pdb.interaction(self, *args, **kwargs)
-        finally:
-            sys.stdin = _stdin
-
 class ColBERT(BaseColBERT):
     """
         This class handles the basic encoding and scoring operations in ColBERT. It is used for training.
@@ -67,8 +54,6 @@ class ColBERT(BaseColBERT):
         cls.loaded_extensions = True
 
     def forward(self, Q, D):
-
-        # ForkedPdb().set_trace()
         Q = self.query(*Q)
         D, D_mask = self.doc(*D, keep_dims='return_mask')
 
@@ -125,9 +110,10 @@ class ColBERT(BaseColBERT):
         mask = torch.tensor(self.mask(input_ids, skiplist=self.skiplist), device=self.device).unsqueeze(2).type(D.dtype)
         D = D * mask
         
-        # TODO: removing for now/debugging PyTorch Lightning precision.
-        # if self.use_gpu:
-        #     D = D.half()
+        # This won't interfere with training because colbert_config is passed as None
+        # from ColBERTLightning and therefore use_gpu=False
+        if self.use_gpu:
+            D = D.half()
 
         if keep_dims is False:
             D, mask = D.cpu(), mask.bool().cpu().squeeze(-1)
