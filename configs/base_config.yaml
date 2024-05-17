@@ -1,11 +1,14 @@
 model:
   name: "jinaai/jina-xlm-roberta-base-8k"
+  checkpoint: ~
 resources:
   accelerator: gpu
-  devices: [0]
+  gpus: [0]
   precision: 16-mixed
 hyperparameters:
   loss: InfoNCE
+  epochs: 1
+  gradient_accumulation_steps: 1
   optimizer:
     name: AdamW
     options:
@@ -16,24 +19,23 @@ hyperparameters:
       eps: 1.0e-8
       weight_decay: 0.01
       amsgrad: False
-    epochs: 1
-    gradient_accumulation_steps: 1
   scheduler:
-    name: linear-warmup
-    options:
-      num_warmup_steps: 10_000
-      num_training_steps:1_000_000
+    name: linear
+    num_warmup_steps: 100
+    num_training_steps: 2048
 dataset:
   s3_bucket: "embedding-datasets"
+  input_types:
+    "*/triplets-multiple-negatives/*": MULTIPLE_NEGATIVES_WITHOUT_SCORES
   datasets: 
-   "en/triplets-multiple-negatives/msmarco-bge" : MULTIPLE_NEGATIVES_WITHOUT_SCORES
-   "en/triplets-multiple-negatives/nq-bge" : MULTIPLE_NEGATIVES_WITHOUT_SCORES
-  max_shards: None
+   - "en/triplets-multiple-negatives/msmarco-bge"
+   - "en/triplets-multiple-negatives/nq-bge"
+  max_shards: ~
   dialect: tsv
 dataloader:
-  batch_size: 32
+  batch_size: 16
   num_workers: 0
-  num_negatives: 8
+  num_negatives: 7
 tokenizer:
   query_token: "[QueryMarker]"
   doc_token: "[DocMarker]"
@@ -43,8 +45,19 @@ interaction:
   similarity: cosine
   mask_punctuation: True
   attend_to_mask_tokens: False
-wandb:
-  project: jina-colbert
+callbacks:
+  LearningRateMonitor:
+    logging_interval: step
+strategy:
+  DeepSpeedStrategy:
+    stage: 2
+logger:
+  WandbLogger:
+    project: "jina-colbert"
+profiler: ~
+trainer_options:
+  fast_dev_run: 64
+  max_steps: ${hyperparameters.scheduler.num_training_steps}
 
 
 
