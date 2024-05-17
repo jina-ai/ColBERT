@@ -149,64 +149,30 @@ We can evaluate the MSMARCO rankings using the following command:
 ```
 python -m utility.evaluate.msmarco_passages --ranking "/path/to/msmarco.nbits=2.ranking.tsv" --qrels "/path/to/MSMARCO/qrels.dev.small.tsv"
 ```
+## New Training
+The original implementation of training ColBERT, using `training/training.py` did it's own multiprocessing distributed training which was hard to follow and not easily configurable for our needs. We reimplement the training loop (keeping indexing and searching the same) in PyTorch Lightning (`training/ColBERTLightning.py`) with Hydra YAML configuration in `configs` with the default config being `configs/base_config.yaml` which gives a good idea of what settings/hyperparameters are supported.
 
-## Basic Training (ColBERTv1-style)
-
-We provide a [pre-trained model checkpoint](https://downloads.cs.stanford.edu/nlp/data/colbert/colbertv2/colbertv2.0.tar.gz), but we also detail how to train from scratch here.
-Note that this example demonstrates the ColBERTv1 style of training, but the provided checkpoint was trained with ColBERTv2.
-
-Training requires a JSONL triples file with a `[qid, pid+, pid-]` list per line. The query IDs and passage IDs correspond to the specified `queries.tsv` and `collection.tsv` files respectively.
-
-Example usage (training on 4 GPUs):
-
-```python
-from colbert.infra import Run, RunConfig, ColBERTConfig
-from colbert import Trainer
-
-if __name__=='__main__':
-    with Run().context(RunConfig(nranks=4, experiment="msmarco")):
-
-        config = ColBERTConfig(
-            bsize=32,
-            root="/path/to/experiments",
-        )
-        trainer = Trainer(
-            triples="/path/to/MSMARCO/triples.train.small.tsv",
-            queries="/path/to/MSMARCO/queries.train.small.tsv",
-            collection="/path/to/MSMARCO/collection.tsv",
-            config=config,
-        )
-
-        checkpoint_path = trainer.train()
-
-        print(f"Saved checkpoint to {checkpoint_path}...")
+Training can be run using the following command:
+```
+python -m colbert.train --config-name base_config.yaml
+```
+You can modify individual settings of the default configuration in the command line as follows:
+```
+python -m colbert.train --config-name base_config.yaml path.to.setting=new_value
 ```
 
-## Advanced Training (ColBERTv2-style)
-
-```python
-from colbert.infra.run import Run
-from colbert.infra.config import ColBERTConfig, RunConfig
-from colbert import Trainer
-
-
-def train():
-    # use 4 gpus (e.g. four A100s, but you can use fewer by changing nway,accumsteps,bsize).
-    with Run().context(RunConfig(nranks=4)):
-        triples = '/path/to/examples.64.json'  # `wget https://huggingface.co/colbert-ir/colbertv2.0_msmarco_64way/resolve/main/examples.json?download=true` (26GB)
-        queries = '/path/to/MSMARCO/queries.train.tsv'
-        collection = '/path/to/MSMARCO/collection.tsv'
-
-        config = ColBERTConfig(bsize=32, lr=1e-05, warmup=20_000, doc_maxlen=180, dim=128, attend_to_mask_tokens=False, nway=64, accumsteps=1, similarity='cosine', use_ib_negatives=True)
-        trainer = Trainer(triples=triples, queries=queries, collection=collection, config=config)
-
-        trainer.train(checkpoint='colbert-ir/colbertv1.9')  # or start from scratch, like `bert-base-uncased`
-
-
-if __name__ == '__main__':
-    train()
-```
-
+### Important/Notable Changes
+- **Datasets**: Data is now specified through S3 buckets in a manner similar to `finetuner-large-scale-training`, you specify an `s3_bucket`, list of datasets (paths), and their `InputType`, which supports directory-regex-like patterns such as:
+    ```
+    dataset:
+    s3_bucket: "embedding-datasets"
+    input_types:
+        "*/triplets-multiple-negatives/*": MULTIPLE_NEGATIVES_WITHOUT_SCORES
+    datasets:
+        - "en/triplets-multiple-negatives/msmarco-bge"
+        - "en/triplets-multiple-negatives/nq-bge"
+    ```
+- **Tokenization**: The query and document marker tokens `[QueryMarker]` and `[DocMarker]` are now added to the tokenizer's special token vocabulary and extend the model's token embeddings (by 2). These changes will be loaded naturally by checkpoints which save the model/tokenizer, or applied automatically when loading a HF transformer that doesn't have them yet.
 
 ## Running a lightweight ColBERTv2 server
 We provide a script to run a lightweight server which serves k (upto 100) results in ranked order for a given search query, in JSON format. This script can be used to power DSP programs. 
