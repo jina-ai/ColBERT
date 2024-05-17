@@ -18,7 +18,7 @@ from transformers import (
 from omegaconf import DictConfig
 
 from colbert.data.dataset import InputType, MultiDataset
-from colbert.modeling.colbert import ColBERT, ForkedPdb
+from colbert.modeling.colbert import ColBERT
 from colbert.infra.config import ColBERTConfig
 from colbert.data.collate import collate
 from colbert.modeling.tokenization import ColBERTTokenizer
