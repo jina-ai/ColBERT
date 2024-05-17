@@ -2,7 +2,6 @@ from colbert.infra import ColBERTConfig
 from colbert.search.strided_tensor import StridedTensor
 from colbert.utils.utils import print_message, flatten
 from colbert.modeling.base_colbert import BaseColBERT
-from colbert.parameters import DEVICE
 
 import torch
 import string
@@ -10,10 +9,6 @@ import string
 import os
 import pathlib
 from torch.utils.cpp_extension import load
-
-
-import sys
-import pdb
 
 class ColBERT(BaseColBERT):
     """

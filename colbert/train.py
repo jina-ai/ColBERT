@@ -1,8 +1,5 @@
-import logging
 from typing import Dict, List
-import warnings
 from loguru import logger
-import re
 import os
 import hydra
 import torch
@@ -21,7 +18,6 @@ from colbert.data.dataset import InputType, MultiDataset, _path_to_name
 from colbert.data.utils import get_input_type
 from colbert.modeling.tokenization import ColBERTTokenizer
 from colbert.training.ColBERTLightning import ColBERTLightning
-from colbert.infra.config import ColBERTConfig
 
 
 def module_class_constructor(module, cls_configs: DictConfig, singleton=False):

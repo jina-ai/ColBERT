@@ -14,7 +14,7 @@ from colbert.utils.amp import MixedPrecisionManager
 from colbert.training.lazy_batcher import LazyBatcher
 from colbert.parameters import DEVICE
 
-from colbert.modeling.colbert import ColBERT, ForkedPdb
+from colbert.modeling.colbert import ColBERT
 from colbert.modeling.reranker.electra import ElectraReranker
 
 from colbert.utils.utils import print_message
@@ -48,9 +48,7 @@ def train(config: ColBERTConfig, triples, queries=None, collection=None):
         raise NotImplementedError()
 
     if not config.reranker:
-        # ForkedPdb().set_trace()
         colbert = ColBERT(name=config.checkpoint, colbert_config=config)
-        # ForkedPdb().set_trace()
     else:
         colbert = ElectraReranker.from_pretrained(config.checkpoint)
 
@@ -108,15 +106,12 @@ def train(config: ColBERTConfig, triples, queries=None, collection=None):
 
                 scores = colbert(*encoding)
 
-                ForkedPdb().set_trace()
-
                 if config.use_ib_negatives:
                     scores, ib_loss = scores
 
                 scores = scores.view(-1, config.nway)
 
                 if len(target_scores) and not config.ignore_scores:
-                    ForkedPdb().set_trace()
                     target_scores = torch.tensor(target_scores).view(-1, config.nway).to(DEVICE)
                     target_scores = target_scores * config.distillation_alpha
                     target_scores = torch.nn.functional.log_softmax(target_scores, dim=-1)

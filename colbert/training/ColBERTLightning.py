@@ -1,30 +1,17 @@
 import torch
 from torch import Tensor
-from torch.utils.data import DataLoader
 from torch.optim import AdamW
 
-from lightning import Trainer, LightningModule
-from lightning.fabric.fabric import Fabric
-from lightning.pytorch.loggers import WandbLogger
+from lightning import LightningModule
 
-from typing import Dict, List, Union, Tuple, Any
+from typing import Dict, Tuple
 
-from transformers import (
-    get_linear_schedule_with_warmup,
-    get_cosine_schedule_with_warmup,
-    get_scheduler,
-)
+from transformers import get_scheduler
 
 from omegaconf import DictConfig
 
-from colbert.data.dataset import InputType, MultiDataset
 from colbert.modeling.colbert import ColBERT
-from colbert.infra.config import ColBERTConfig
-from colbert.data.collate import collate
-from colbert.modeling.tokenization import ColBERTTokenizer
 
-from functools import partial
-from loguru import logger
 
 
 class ColBERTLightning(LightningModule):
